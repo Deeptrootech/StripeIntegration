@@ -1,0 +1,3 @@
+djangorestframework==3.16.0
+
+stripe==12.0.1
