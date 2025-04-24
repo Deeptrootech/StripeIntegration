@@ -7,6 +7,7 @@ from django.utils.translation import gettext_lazy as _
 
 class User(AbstractUser):
     email = models.EmailField(_("Email address"))
+    stripe_customer_id = models.CharField(max_length=255, null=True, blank=True)
 
     def __str__(self):
         return self.email

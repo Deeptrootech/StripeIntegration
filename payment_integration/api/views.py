@@ -34,17 +34,19 @@ class CreateStripeCheckoutSession(APIView):
             plan = request.data.get("plan")
 
             price_map = {
-                "basic": "price_ABC",
+                "basic": "price_ABC",  # This is Price Key(plan key from stripe dashboard)
                 "pro": "price_DEF",
             }
 
             session = stripe.checkout.Session.create(
                 payment_method_types=['card'],
                 mode='subscription',
-                line_items=[{
-                    'price': price_map.get(plan, "price_DEF"),  # Stripe Price ID (linked to product & amount)
-                    'quantity': 1,  # how many units of that plan/product
-                }],
+                subscription_data={
+                    "items": [{
+                        "price": price_map.get(plan, "price_DEF"),  # Stripe Price ID (linked to product & amount)
+                        "quantity": 1  # how many units of that plan/product
+                    }]
+                },
                 customer_email=customer_email,
                 success_url='https://yourdomain.com/success?session_id={CHECKOUT_SESSION_ID}',
                 cancel_url='https://yourdomain.com/cancel',
@@ -74,3 +76,11 @@ def stripe_webhook(request):
         # Save user/subscription info here
 
     return HttpResponse(status=200)
+
+
+# subscription = stripe.Subscription.create(
+#     customer='cus_123',
+#     items=[{'price': 'price_abc'}],
+#     collection_method='send_invoice',  # or 'charge_automatically' (i.e auto debase money after due_date)
+#     days_until_due=7  # Only if using invoice
+# )
