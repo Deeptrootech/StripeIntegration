@@ -26,6 +26,18 @@ class CreateStripeCheckoutSession(APIView):
           "plan": "pro"  // or "basic", etc. (We will be using multiple plans)
         }
     """
+    def get_or_create_stripe_customer(self):
+        user = self.request.user
+        if not user.stripe_customer_id:
+            customer = stripe.Customer.create(
+                email=user.email,
+                metadata={"user_id": user.id}
+            )
+            user.stripe_customer_id = customer.id
+            user.save()
+        else:
+            customer = stripe.Customer.retrieve(user.stripe_customer_id)
+        return customer
 
     def post(self, request):
         try:
@@ -35,20 +47,19 @@ class CreateStripeCheckoutSession(APIView):
 
             price_map = {
                 "basic": "price_ABC",  # This is Price Key(plan key from stripe dashboard)
-                "pro": "price_DEF",
+                "pro": "price_1RGeD6IGCuzeTufHrLmC4gs5",
             }
 
             session = stripe.checkout.Session.create(
+                customer=self.get_or_create_stripe_customer().id,
                 payment_method_types=['card'],
                 mode='subscription',
-                subscription_data={
-                    "items": [{
-                        "price": price_map.get(plan, "price_DEF"),  # Stripe Price ID (linked to product & amount)
-                        "quantity": 1  # how many units of that plan/product
-                    }]
-                },
-                customer_email=customer_email,
-                success_url='https://yourdomain.com/success?session_id={CHECKOUT_SESSION_ID}',
+                line_items=[{
+                    "price": price_map.get(plan, "price_1RGeD6IGCuzeTufHrLmC4gs5"),
+                    # Stripe Price ID (linked to product & amount)
+                    "quantity": 1  # how many units of that plan/product
+                }],
+                success_url='https://www.google.com/',
                 cancel_url='https://yourdomain.com/cancel',
             )
             return Response({"url": session.url})
@@ -76,7 +87,6 @@ def stripe_webhook(request):
         # Save user/subscription info here
 
     return HttpResponse(status=200)
-
 
 # subscription = stripe.Subscription.create(
 #     customer='cus_123',

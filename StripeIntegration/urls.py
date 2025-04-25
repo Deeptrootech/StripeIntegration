@@ -19,5 +19,6 @@ from django.urls import path, include
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("api/", include("user.api.urls", namespace="user_api")),
     path('api/', include('payment_integration.api.urls')),
 ]
