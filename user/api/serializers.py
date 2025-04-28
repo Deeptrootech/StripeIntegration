@@ -16,11 +16,10 @@ class AuthSerializer(serializers.Serializer):
 
         user = authenticate(
             request=self.context.get("request"),
-            email=email,
             username=email,
             password=password,
         )
-        breakpoint()
+
         if not user:
             raise serializers.ValidationError("Credentials not valid..!!")
         attrs["user"] = user
