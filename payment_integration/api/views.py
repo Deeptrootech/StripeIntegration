@@ -5,14 +5,23 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.views.decorators.csrf import csrf_exempt
-from django.http import HttpResponse
-import json
+from django.http import JsonResponse
+from datetime import datetime
+
+from payment_integration.models import StripeCheckoutSession, CheckoutSessionStatusChoices
+from user.models import User
+from payment_integration.webhook_handler import handle_invoice_paid, handle_payment_intent_failed, \
+    handle_invoice_payment_succeeded, handle_invoice_payment_failed, handle_other_events, \
+    handle_checkout_session_completed, handle_checkout_session_expired
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
 class CreateStripeCheckoutSession(APIView):
     """
+    JUST REFER "STRIPE PAYMENT" DOC.
+    YOU WILL GET WHY THIS CLASS CREATED AND HOW TO USE WEBHOOK(below "stripe_webhook" func)
+
     Modes in Stripe Checkout:
         Mode	                       Use When You Want To...
     'payment'	                    Collect a one-time payment
@@ -22,10 +31,14 @@ class CreateStripeCheckoutSession(APIView):
     Here, I have used for subscription Mode checkout.
     Request:
         {
-          "email": "user@example.com",
           "plan": "pro"  // or "basic", etc. (We will be using multiple plans)
         }
+
+    Response:
+    Step 1: creates checkout session entry to stripe dashboard and send Payment URL
+    Step 2: after click that URL and paying successfully It will be rediredted to given success_url.
     """
+
     def get_or_create_stripe_customer(self):
         user = self.request.user
         if not user.stripe_customer_id:
@@ -39,15 +52,43 @@ class CreateStripeCheckoutSession(APIView):
             customer = stripe.Customer.retrieve(user.stripe_customer_id)
         return customer
 
+    def checkout_session_created(self, session):
+        print("***************************checkout_session_created**********************************")
+        stripe_checkout_session_id = session.get('id')
+        stripe_customer_id = session.get('customer')
+        checkout_session_expire_at = session.get('expires_at')
+        checkout_session_created_at = session.get('created')
+        stripe_customer_email = session.get('customer_details').get("email")
+
+        # 1) get DB user bases on stripe user email and update with stripe_customer_id
+        user = User.objects.get(email=stripe_customer_email)
+        user.stripe_customer_id = stripe_customer_id
+        user.save()
+
+        # 2) create Checkout Session (SESSION JUST CREATED, NOT COMPLETED YET.)
+        session_expire_at = datetime.fromtimestamp(checkout_session_expire_at)
+        session_created_at = datetime.fromtimestamp(checkout_session_created_at)
+        StripeCheckoutSession.objects.create(user=user,
+                                             stripe_customer_id=stripe_customer_id,
+                                             stripe_checkout_session_id=stripe_checkout_session_id,
+                                             is_completed=False,
+                                             status=CheckoutSessionStatusChoices.CREATED,
+                                             session_created_at=session_created_at,
+                                             session_expire_at=session_expire_at)
+
     def post(self, request):
+        """
+        You do not need to call stripe.Subscription.create manually,
+        when using Checkout with mode='subscription'.
+        Stripe creates the subscription automatically once Checkout is initiated.
+        """
         try:
             # Example: passed in from frontend
-            customer_email = request.data.get("email")
             plan = request.data.get("plan")
 
             price_map = {
-                "basic": "price_ABC",  # This is Price Key(plan key from stripe dashboard)
-                "pro": "price_1RGeD6IGCuzeTufHrLmC4gs5",
+                "basic": "price_ABC",
+                "pro": "price_1RGeD6IGCuzeTufHrLmC4gs5",  # This is Price Key(plan key from stripe dashboard)
             }
 
             session = stripe.checkout.Session.create(
@@ -62,6 +103,7 @@ class CreateStripeCheckoutSession(APIView):
                 success_url='https://www.google.com/',
                 cancel_url='https://yourdomain.com/cancel',
             )
+            self.checkout_session_created(session)
             return Response({"url": session.url})
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -69,28 +111,63 @@ class CreateStripeCheckoutSession(APIView):
 
 @csrf_exempt
 def stripe_webhook(request):
+    """
+    INTEGRATION OF STRIPE WEBHOOK IN OUR APPLICATION:
+    - you know when each webhook called. (ref. prepared doc)
+    - create function (here, this function) to handle webhook call.
+    1) After creating this function... go to stripe dashboard clicking below link.
+       https://dashboard.stripe.com/test/workbench/webhooks
+    2) Click "Add destination"
+    3) Select events: select webhook event which you want to listen to.
+       e.g., checkout.session.completed, invoice.payment_succeeded, etc.
+    4) Choose destination type & Configure your destination: enter the URL of your webhook endpoint,
+       e.g., https://yourdomain.com/webhook/. (URL should be publically accessible)
+       IMP: (For Publically accessible URL) For Local... Use Ngrok - (You can always Edit Destination)
+    5) add different webhook event handler to handle each webhook call from stripe as given below.
+    """
     payload = request.body
     sig_header = request.META['HTTP_STRIPE_SIGNATURE']
-    endpoint_secret = settings.STRIPE_WEBHOOK_SECRET
+    endpoint_secret = settings.STRIPE_WEBHOOK_SECRET  # Signing secret
+
+    # ---------- Just for Debuggging ------------
+    # Stripe includes a timestamp in the signature,
+    # so you may get a mismatch if your server's time is out of sync with Stripe’s time.
+    # That might cause error so, just checking that below.
+    # 1) Extract timestamp from the signature header
+    timestamp = int(sig_header.split(',')[0].split('=')[1])
+    import time
+    # 2) Log the timestamp and current server time for debugging
+    print(f"Stripe timestamp: {timestamp}")
+    print(f"Current server time: {int(time.time())}")
+    # --------------------------------------------
 
     try:
         event = stripe.Webhook.construct_event(
             payload, sig_header, endpoint_secret
         )
-    except stripe.error.SignatureVerificationError:
-        return HttpResponse(status=400)
+        # Handle the event using appropriate handler (Handlers are for mode = 'subscription')
+        if event['type'] == 'checkout.session.expired':
+            handle_checkout_session_expired(event)
+        elif event['type'] == 'checkout.session.completed':
+            handle_checkout_session_completed(event)
+        elif event['type'] == 'invoice.paid':
+            handle_invoice_paid(event)
+        elif event['type'] == 'payment_intent.payment_failed':
+            handle_payment_intent_failed(event)
+        elif event['type'] == 'invoice.payment_succeeded':
+            handle_invoice_payment_succeeded(event)
+        elif event['type'] == 'invoice.payment_failed':
+            handle_invoice_payment_failed(event)
+        else:
+            handle_other_events(event)
 
-    # Handle the event
-    if event['type'] == 'checkout.session.completed':
-        session = event['data']['object']
-        print("Subscription created for:", session.get("customer_email"))
-        # Save user/subscription info here
+        # Return a response to acknowledge receipt of the event
+        return JsonResponse({'status': 'success'}, status=200)
 
-    return HttpResponse(status=200)
-
-# subscription = stripe.Subscription.create(
-#     customer='cus_123',
-#     items=[{'price': 'price_abc'}],
-#     collection_method='send_invoice',  # or 'charge_automatically' (i.e auto debase money after due_date)
-#     days_until_due=7  # Only if using invoice
-# )
+    except ValueError as e:
+        print(f"Invalid payload: {e}")
+        return JsonResponse({'status': 'failure'}, status=400)
+    except stripe.error.SignatureVerificationError as e:
+        print(f"Invalid signature: {e}")
+        return JsonResponse({'status': 'failure'}, status=400)
+        # return HttpResponse(status=400)

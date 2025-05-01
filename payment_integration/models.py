@@ -4,36 +4,111 @@ from django.contrib.auth import get_user_model
 User = get_user_model()
 
 
-class Plan(models.Model):
+class Product(models.Model):
     """
-    stores all subscription plans defined in stripe dashboard.
+    What you're selling — e.g., "Pro Plan", "Monthly Subscription"
+
+    To create Product in stripe:
+    stripe.Product.create(name="AI Pro Plan")
     """
-    BILLING_CYCLE_CHOICES = (
-        ('monthly', 'Monthly'),
-        ('yearly', 'Yearly'),
-    )
-    plan_price_id = models.CharField(max_length=100)  # Stripe Price ID
     name = models.CharField(max_length=255)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    billing_cycle = models.CharField(max_length=20, choices=BILLING_CYCLE_CHOICES)
+    description = models.CharField(max_length=500, null=True, blank=True)
+    stripe_product_id = models.CharField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
 
     def __str__(self):
-        return f"{self.name} - {self.billing_cycle} - ₹{self.price}"
+        return self.name
+
+
+class PriceBillingCycleChoices:
+    MONTHLY = 'monthly'
+    YEARLY = 'yearly'
+
+    BILLING_CYCLE_CHOICES = (
+        (MONTHLY, 'Monthly'),
+        (YEARLY, 'Yearly'),
+    )
+
+
+class Price(models.Model):
+    """
+    TODO (IMP): Plan Model is Deprecated, now It handled by Price object itself.
+    Price replace old Plan model
+
+    To create Price in stripe:
+    stripe.Price.create(
+        unit_amount=1000,  # $10.00
+        currency="usd",
+        recurring={"interval": "month"},
+        product=product_id,
+    )
+    """
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='prices')
+    stripe_price_id = models.CharField(max_length=100, unique=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, help_text="Per product unit amount")
+    currency = models.CharField(max_length=10)
+    interval = models.CharField(max_length=20, choices=PriceBillingCycleChoices.BILLING_CYCLE_CHOICES,
+                                default=PriceBillingCycleChoices.MONTHLY)  # e.g., 'month', 'year'
+    interval_count = models.IntegerField(default=1)
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f"{self.amount} {self.currency} / {self.interval}"
+
+
+class CheckoutSessionStatusChoices:
+    CREATED = 'created'
+    EXPIRED = 'expired'
+    COMPLETED = 'completed'
+
+    STATUS_CHOICES = (
+        (CREATED, "Created"),
+        (EXPIRED, "Expired"),
+        (COMPLETED, "Completed"),
+    )
 
 
 class StripeCheckoutSession(models.Model):
     """
     Stores details regarding Stripe checkout attempts. (Detail of user's every checkout attempts)
     """
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user_checkout_sessions')
-    stripe_customer_id = models.CharField(max_length=255, unique=True)
-    stripe_checkout_session_id = models.CharField(max_length=255, unique=True)
-    plan = models.ForeignKey(User, on_delete=models.CASCADE, related_name='plan_checkout_sessions')
-    is_completed = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user_checkout_sessions')
+    stripe_customer_id = models.CharField(max_length=255)
+    stripe_checkout_session_id = models.CharField(max_length=255, unique=True)
+    price = models.ForeignKey(Price, on_delete=models.CASCADE, related_name='price_checkout_sessions', null=True,
+                              blank=True)
+    is_completed = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, choices=CheckoutSessionStatusChoices.STATUS_CHOICES, null=True, blank=True)
+    session_created_at = models.DateTimeField(null=True, blank=True)
+    session_expire_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.user.email if self.user else 'Guest'} - {self.stripe_checkout_session_id}"
+
+
+class PaymentRecordChoices:
+    ONE_TIME = 'one_time'
+    SUBSCRIPTION = 'subscription'
+    CARD = 'card'
+    PENDING = 'pending'
+    SUCCEEDED = 'succeeded'
+    FAILED = 'failed'
+
+    PAYMENT_TYPE_CHOICES = (
+        (ONE_TIME, 'One-Time'),
+        (SUBSCRIPTION, 'Subscription'),
+    )
+
+    PAYMENT_MODE_CHOICES = (
+        (CARD, 'Card'),
+    )
+
+    PAYMENT_STATUS = (
+        (PENDING, 'Pending'),
+        (SUCCEEDED, 'Succeeded'),
+        (FAILED, 'Failed'),
+    )
 
 
 class PaymentRecord(models.Model):
@@ -41,22 +116,14 @@ class PaymentRecord(models.Model):
     Stores details regarding payment attempts (first_time or recurring).
     (Detail of user's every payment attempts while checking out)
     """
-    PAYMENT_TYPE_CHOICES = (
-        ('one_time', 'One-Time'),
-        ('subscription', 'Subscription'),
-    )
-    PAYMENT_MODE_CHOICES = (
-        ('card', 'Card'),
-    )
-    PAYMENT_STATUS = (
-        ('pending', 'Pending'),
-        ('succeeded', 'Succeeded'),
-        ('failed', 'Failed'),
-    )
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user_payment_records')
-    payment_type = models.CharField(max_length=20, choices=PAYMENT_TYPE_CHOICES)
-    payment_mode = models.CharField(max_length=20, choices=PAYMENT_MODE_CHOICES)
+    payment_type = models.CharField(max_length=20, choices=PaymentRecordChoices.PAYMENT_TYPE_CHOICES,
+                                    default=PaymentRecordChoices.SUBSCRIPTION)
+    payment_mode = models.CharField(max_length=20, choices=PaymentRecordChoices.PAYMENT_MODE_CHOICES,
+                                    default=PaymentRecordChoices.CARD)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
+    invoice_url = models.CharField(null=True, blank=True)
     checkout_session = models.ForeignKey(
         StripeCheckoutSession,
         on_delete=models.SET_NULL,
@@ -66,22 +133,40 @@ class PaymentRecord(models.Model):
     )
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True,
                                                 help_text="Stripe's internal ID for a specific payment attempt")
-    status = models.CharField(max_length=20, choices=PAYMENT_STATUS, default='pending')
+    status = models.CharField(max_length=20, choices=PaymentRecordChoices.PAYMENT_STATUS,
+                              default=PaymentRecordChoices.PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"{self.user.email} - ₹{self.amount} - {self.status}"
 
 
-class UserSubscription(models.Model):
+class SubscriptionStatusChoices:
+    ACTIVE = 'active'
+    INACTIVE = 'inactive'
+
     STATUS_CHOICES = (
-        ("active", "Active"),
-        ("inactive", "Inactive"),
+        (ACTIVE, "Active"),
+        (INACTIVE, "Inactive"),
     )
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='user_subscriptions')
+
+
+class UserSubscription(models.Model):
+    """
+    If Your user can only subscribe to one plan at a time (upgrade/downgrade allowed).
+    - Use OneToOneField for "user"
+    - Use unique=True for "stripe_customer_id"
+
+    If You offer add-ons, or parallel subscriptions (like Netflix + Extra Screens + Kids mode, etc.)
+    - Use ForeignKey for "user"
+
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user_subscriptions',
+                             help_text="a user should have only one subscription")
     stripe_subscription_id = models.CharField(max_length=100, unique=True)
-    stripe_customer_id = models.CharField(max_length=100, unique=True)
-    plan = models.ForeignKey(Plan, on_delete=models.CASCADE, related_name='plan_subscriptions')
+    stripe_customer_id = models.CharField(max_length=100)
+    price = models.ForeignKey(Price, on_delete=models.CASCADE, related_name='price_subscriptions', null=True,
+                              blank=True)
     checkout_session = models.ForeignKey(
         StripeCheckoutSession,
         on_delete=models.SET_NULL,
@@ -89,10 +174,11 @@ class UserSubscription(models.Model):
         blank=True,
         related_name='checkout_ubscriptions'
     )
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    status = models.CharField(max_length=20, choices=SubscriptionStatusChoices.STATUS_CHOICES,
+                              default=SubscriptionStatusChoices.INACTIVE)
     start_date = models.DateTimeField()
     end_date = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.user.email} - {self.plan.name} - {self.status}"
+        return f"{self.user.email} - {self.price} - {self.status}"

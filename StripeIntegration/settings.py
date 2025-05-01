@@ -9,9 +9,10 @@ https://docs.djangoproject.com/en/4.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
-
+from datetime import timedelta
 from pathlib import Path
 import environ
+import hashlib
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -37,7 +38,7 @@ SECRET_KEY = "django-insecure-%*4yoo1&ktfv64)@^23$t3@eyzwe%o4*tw)w-rnu+wh1)f46d=
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["*"]
 
 # Application definition
 
@@ -54,6 +55,25 @@ INSTALLED_APPS = [
     "rest_framework.authtoken",
     "knox",
 ]
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": ("knox.auth.TokenAuthentication",),
+    "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
+    "PAGE_SIZE": 15,
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+REST_KNOX = {
+    "SECURE_HASH_ALGORITHM": hashlib.sha512,
+    "AUTH_TOKEN_CHARACTER_LENGTH": 64,  # By default, it is set to 64 characters (this shouldn't need changing).
+    "TOKEN_TTL": timedelta(
+        hours=10
+    ),  # The default is 10 hours i.e., timedelta(hours=10)).
+    "USER_SERIALIZER": "knox.serializers.UserSerializer",
+    "TOKEN_LIMIT_PER_USER": None,  # By default, this option is disabled and set to None -- thus no limit.
+    "AUTO_REFRESH": False,
+    # 'EXPIRY_DATETIME_FORMAT': api_settings.DATETIME_FORMAT,
+}
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -137,4 +157,4 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Stripe Configurations
 STRIPE_PUBLIC_KEY = env.str("STRIPE_PUBLIC_KEY")
 STRIPE_SECRET_KEY = env.str("STRIPE_SECRET_KEY")
-STRIPE_WEBHOOK_SECRET = env.str("STRIPE_WEBHOOK_SECRET")
+STRIPE_WEBHOOK_SECRET = env.str("STRIPE_WEBHOOK_SECRET")  # Signing secret

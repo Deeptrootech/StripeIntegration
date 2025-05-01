@@ -12,5 +12,5 @@ import os
 from django.core.wsgi import get_wsgi_application
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "StripeIntegration.settings")
-
 application = get_wsgi_application()
+print("____________Need to use Ngrok and set url to stripe dashboard webhook________")
