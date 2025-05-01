@@ -153,17 +153,33 @@ class SubscriptionStatusChoices:
 
 class UserSubscription(models.Model):
     """
-    If Your user can only subscribe to one plan at a time (upgrade/downgrade allowed).
+    1. Only one UserSubscription entry allowed In entire website. (not able to create other any)
     - Use OneToOneField for "user"
     - Use unique=True for "stripe_customer_id"
+    - Use unique=True for "stripe_subscription_id"
 
-    If You offer add-ons, or parallel subscriptions (like Netflix + Extra Screens + Kids mode, etc.)
+    2. Multiple UserSubscription entries allowed.
+    (i) If Your user can only subscribe to one plan at a time (upgrade/downgrade allowed).
     - Use ForeignKey for "user"
+    - stripe_subscription_item_id (In one suscription, one product/item subscribed)
+      (No need to create another model for "subscription_item"
+      just add id of suscribed item as stripe_subscription_item_id In current(UserSubscription) model.)
+    (ii) If You offer add-ons, or parallel subscriptions (like Netflix + Extra Screens + Kids mode, etc.)
+    - Use ForeignKey for "user"
+    - stripe_subscription_item_id (In one parent suscription, many products/items subscribed)
+    then...
+    create another model like through between... UserSubscription & Price
+    having fields
+    stripe_subscription_item_id, price(obj)
+    and remove those fields from  UserSubscription and add through model m2m instead.
 
+
+    Here, below Model & create_user_subscription() created for 2-(i).
     """
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user_subscriptions',
-                             help_text="a user should have only one subscription")
-    stripe_subscription_id = models.CharField(max_length=100, unique=True)
+                             help_text="a user can have multiple subscription, But only one at a time")
+    stripe_subscription_id = models.CharField(max_length=100, null=True, blank=True)
+    stripe_subscription_item_id = models.CharField(max_length=100, unique=True, null=True, blank=True)
     stripe_customer_id = models.CharField(max_length=100)
     price = models.ForeignKey(Price, on_delete=models.CASCADE, related_name='price_subscriptions', null=True,
                               blank=True)

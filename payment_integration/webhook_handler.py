@@ -1,8 +1,9 @@
 import stripe
 from datetime import datetime
 from user.models import User
-from .models import PaymentRecord, StripeCheckoutSession, UserSubscription, SubscriptionStatusChoices, \
-    CheckoutSessionStatusChoices, PaymentRecordChoices, Price, Product
+from .models import (PaymentRecord, StripeCheckoutSession, UserSubscription, SubscriptionStatusChoices,
+                     CheckoutSessionStatusChoices, PaymentRecordChoices, Price, Product)
+from .utils import get_or_create_product, get_or_create_price, create_user_subscription, create_payment_record
 
 
 def handle_checkout_session_expired(event):
@@ -48,7 +49,7 @@ def handle_checkout_session_completed(event):
     checkoutsession.is_completed = True
     checkoutsession.status = CheckoutSessionStatusChoices.COMPLETED
     checkoutsession.save()
-    print("Subscription created for:", checkoutsession.user.email)
+    print("CheckoutSession created for:", checkoutsession.user.email)
 
 
 def handle_invoice_paid(event):
@@ -64,74 +65,47 @@ def handle_invoice_paid(event):
     invoice_url = invoice.get('hosted_invoice_url')
     stripe_subscription_id = invoice.get("parent").get("subscription_details").get("subscription")
     stripe_customer_id = invoice.get('customer')
-    # -----------------------------------------------
+    # --------------------------------------------------------------------------------------------
+    if not stripe_subscription_id:
+        print("No subscription found.")
+        return
     # Skip if subscription already exists
     if UserSubscription.objects.filter(stripe_subscription_id=stripe_subscription_id).exists():
         print("Subscription already exists. Skipping creation.")
-        return  # Avoid duplicate creation
+        return
 
-    # get user object
-    user = User.objects.get(stripe_customer_id=stripe_customer_id)
-    # (1) Get completed checkoutsession.( # get checkout session id here)
-    checkoutsession = StripeCheckoutSession.objects.filter(stripe_customer_id=stripe_customer_id,
-                                                           is_completed=True).order_by("created_at").last()
-
-    # 2) save records in UserSubscription Model
-    # here Product and price that no need to create (handle separate webhook for peoduct/price created)
-    if stripe_subscription_id:
-        try:
-            subscription = stripe.Subscription.retrieve(stripe_subscription_id)
-        except stripe.error.StripeError as e:
-            print(f"Failed to retrieve subscription: {e}")
-            return
-        # create Product object.
-        plan_dict = subscription.get("plan")
-        plan_product_id = plan_dict.get("product")
-        plan_product_dict = stripe.Product.retrieve(plan_product_id)
-
-        product, _ = Product.objects.get_or_create(stripe_product_id=plan_product_id,
-                                                   defaults={"name": plan_product_dict.get("name"),
-                                                             "description": plan_product_dict.get("description")}
-                                                   )
-        # create Price object.
-        stripe_plan_id = plan_dict.get("id")  # From Now In Stripe, Plan is handled by price.
-        plan_price_dict = stripe.Price.retrieve(stripe_plan_id)
-        price, _ = Price.objects.get_or_create(stripe_price_id=stripe_plan_id,
-                                               defaults={
-                                                   "product": product,
-                                                   "amount": plan_price_dict.get("unit_amount"),
-                                                   "currency": plan_price_dict.get("currency"),
-                                                   "interval": plan_price_dict.get("recurring").get("interval"),
-                                                   "interval_count": plan_price_dict.get("recurring").get(
-                                                       "interval_count")
-                                               }
-                                               )
-        subscription_start = subscription.get("start_date")
-        subscription_end = subscription.get("start_date")  # TODO: THEY are not sending end_date in subscription
-        user_subscription, created = UserSubscription.objects.get_or_create(
-            stripe_subscription_id=stripe_subscription_id,
+    try:
+        user = User.objects.get(stripe_customer_id=stripe_customer_id)
+        checkoutsession = StripeCheckoutSession.objects.filter(
             stripe_customer_id=stripe_customer_id,
-            defaults={
-                "user": user,
-                "checkout_session": checkoutsession,
-                "price": price,  # if you're tracking this way
-                "start_date": datetime.fromtimestamp(subscription_start),
-                "end_date": datetime.fromtimestamp(subscription_end),
-                "status": SubscriptionStatusChoices.ACTIVE
-            }
+            is_completed=True
+        ).order_by("created_at").last()
+
+        subscription = stripe.Subscription.retrieve(stripe_subscription_id)
+        plan = subscription.get("plan")
+        product = get_or_create_product(plan.get("product"))
+        price = get_or_create_price(plan.get("id"), product)
+
+        user_subscription = create_user_subscription(
+            user, stripe_subscription_id, stripe_customer_id, checkoutsession, price, subscription
         )
 
-        print("***************************handle_invoice_paid*************************************")
-
-        # 4) save records in PaymentRecord Model
-        PaymentRecord.objects.create(
-            user=user_subscription.user,
-            amount=amount_paid,
-            checkout_session=user_subscription.checkout_session,
-            stripe_payment_intent_id=stripe_payment_intent_id,
-            status=PaymentRecordChoices.SUCCEEDED,
-            invoice_url=invoice_url
+        create_payment_record(
+            user_subscription.user,
+            invoice.get("amount_paid"),
+            checkoutsession,
+            invoice.get("id"),
+            invoice.get("hosted_invoice_url")
         )
+
+        print("✅ Subscription and payment record created successfully.")
+
+    except User.DoesNotExist:
+        print(f"❌ User with customer_id {stripe_customer_id} not found.")
+    except stripe.error.StripeError as e:
+        print(f"❌ Stripe API error: {str(e)}")
+    except Exception as e:
+        print(f"❌ Unexpected error: {str(e)}")
 
 
 def handle_payment_intent_failed(event):
