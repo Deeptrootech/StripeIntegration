@@ -9,6 +9,7 @@ from django.http import JsonResponse
 from datetime import datetime
 
 from payment_integration.models import StripeCheckoutSession, CheckoutSessionStatusChoices
+from payment_integration.tax_estimation.tax_estimation import order_tax_estimation_calculation_payload
 from user.models import User
 from payment_integration.webhook_handler import handle_invoice_paid, handle_payment_intent_failed, \
     handle_invoice_payment_succeeded, handle_invoice_payment_failed, handle_other_events, \
@@ -107,6 +108,31 @@ class CreateStripeCheckoutSession(APIView):
             return Response({"url": session.url})
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class EstimateTaxView(APIView):
+    def get_client_ip(self, request):
+        # TODO: add IPWare
+        x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+        if x_forwarded_for:
+            return x_forwarded_for.split(",")[0]
+        return request.META.get("REMOTE_ADDR")
+
+    def get(self, request):
+        """
+        # Create a tax calculation using Stripbe Tax API
+        --- IMP: Stripe combines product.tax_code + customer.address to apply the correct local tax rate.
+        """
+        calculation_payload = order_tax_estimation_calculation_payload(self.get_client_ip(request))
+        calc = stripe.tax.Calculation.create(**calculation_payload)
+        if not calc:
+            return Response(["Tax calculation failed"])
+        return Response({
+            "plan_price": calc["tax_breakdown"][0]["taxable_amount"] / 100,
+            "sales_tax": calc["tax_breakdown"][0]["amount"] / 100,
+            "total_payable_amount": calc["amount_total"] / 100,
+            "sales_tax_rate": calc["tax_breakdown"][0]["tax_rate_details"]["percentage_decimal"]
+        })
 
 
 @csrf_exempt

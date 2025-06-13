@@ -35,7 +35,6 @@ def create_user_subscription(user, stripe_subscription_id, stripe_customer_id, c
     # TODO: Need to change This function as 2(i) of 'UserSubscription' Model. (use for loop for adding stripe_subscription_item_id)
     start_timestamp = subscription.get("start_date")
     end_timestamp = subscription.get("current_period_end")
-    breakpoint()
     return UserSubscription.objects.create(
         user=user,
         stripe_subscription_id=stripe_subscription_id,
