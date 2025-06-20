@@ -153,7 +153,7 @@ def stripe_webhook(request):
     """
     payload = request.body
     sig_header = request.META['HTTP_STRIPE_SIGNATURE']
-    endpoint_secret = settings.STRIPE_WEBHOOK_SECRET  # Signing secret
+    endpoint_secret = settings.STRIPE_WEBHOOK_SECRET  # Signing secret (i.e. "whsec_X...")
 
     # ---------- Just for Debuggging ------------
     # Stripe includes a timestamp in the signature,

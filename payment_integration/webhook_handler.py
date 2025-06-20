@@ -5,6 +5,28 @@ from .models import (PaymentRecord, StripeCheckoutSession, UserSubscription, Sub
                      CheckoutSessionStatusChoices, PaymentRecordChoices, Price, Product)
 from .utils import get_or_create_product, get_or_create_price, create_user_subscription, create_payment_record
 
+"""
+Expanding Responses: https://docs.stripe.com/api/expanding_objects
+
+IMP Note:
+    1.
+        (Pdb) event.__class__.mro()
+        [<class 'stripe._event.Event'>, <class 'stripe._listable_api_resource.ListableAPIResource'>,
+        <class 'stripe._api_resource.APIResource'>, <class 'stripe._stripe_object.StripeObject'>,
+        <class 'dict'>, <class 'typing.Generic'>, <class 'object'>]
+
+    2.
+        (Pdb) event.data.__class__.mro()
+        [<class 'stripe._event.Event.Data'>, <class 'stripe._stripe_object.StripeObject'>, <class 'dict'>, <class 'typing.Generic'>, <class 'object'>]
+
+    Here, event, event.data are a subclass of 'stripe._stripe_object.StripeObject' and 'dict'....
+    It means we can also handle 'event', 'event.data' as dict.
+    
+    i.e.
+        - event.data & event.get("data")  -----> are same
+        - event.data.object & event.get("data").get("object")  -----> are same
+"""
+
 
 def handle_checkout_session_expired(event):
     """
